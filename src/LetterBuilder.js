@@ -4471,17 +4471,18 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
                           </View>
                         )}
                         {logo && (
-                          <Image
+                          <Animated.Image
                             source={{ uri: logo }}
                             style={[
                               styles.fullImg,
                               {
                                 position: 'absolute',
-                                left: translateX.value,
-                                top: translateY.value,
+                                top: 0,
+                                left: 0,
                                 width: logoSize,
                                 height: logoSize
-                              }
+                              },
+                              animatedLogoStyle
                             ]}
                           />
                         )}
