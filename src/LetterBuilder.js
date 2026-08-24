@@ -2401,6 +2401,36 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
     }
   };
 
+  
+  const handleDeleteCurrent = async () => {
+    if (!currentTemplateId) return;
+    try {
+      setIsSaving(true);
+      if (apiConfig?.deleteDocument) await apiConfig.deleteDocument(currentTemplateId);
+      
+      setCurrentTemplateId(null);
+      setDocName("New Blank Document");
+      setSections({});
+      setSectionList([]);
+      setLogo(null);
+      
+      if (Platform.OS === 'web') {
+        window.alert('Document deleted successfully.');
+      } else {
+        Alert.alert('Success', 'Document deleted successfully.');
+      }
+    } catch (error) {
+      console.warn("Failed to delete document", error);
+      if (Platform.OS === 'web') {
+        window.alert('Failed to delete document. Please try again.');
+      } else {
+        Alert.alert('Error', 'Failed to delete document. Please try again.');
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const handleSaveDraft = async () => {
     setIsSaving(true);
     let templateId = currentTemplateId || Date.now().toString();
@@ -2699,9 +2729,27 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
                     style={{ marginRight: 8 }}
                   />
                   <RNText style={styles.saveBtnText}>
-                    {isSaving ? "Saving..." : "Save Template"}
+                    {isSaving ? "Saving..." : currentTemplateId ? "Update Template" : "Save Template"}
                   </RNText>
                 </Pressable>
+              {currentTemplateId && apiConfig?.deleteDocument && (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.saveBtn,
+                    { backgroundColor: '#EF4444' },
+                    isSaving && { opacity: 0.7 },
+                    pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] }
+                  ]}
+                  onPress={handleDeleteCurrent}
+                  disabled={isSaving}
+                >
+                  <Feather name="trash-2" size={16} color="#FFFFFF" />
+                  <RNText style={styles.saveBtnText}>
+                    {isSaving ? "Deleting..." : "Delete"}
+                  </RNText>
+                </Pressable>
+              )}
+
               </View>
             </View>
 
@@ -2716,6 +2764,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
                 )}
                 <IconButton name="file-plus" label="New Blank" onPress={handleNewBlankTemplate} type="Feather" />
                 <IconButton name="file-text" label="Templates" onPress={() => setShowTemplates(true)} type="Feather" />
+                <IconButton name="upload-cloud" label="Upload/Paste" onPress={() => { setShowTemplates(true); setActiveTemplatesTab('upload'); }} type="Feather" />
                 <IconButton name="upload-cloud" label="Scan" onPress={() => setShowUploadScanModal(true)} type="Feather" />
                 <IconButton name="image" label="Logo" onPress={() => setShowLogoSelector(true)} />
                 <IconButton name="layers" label="Watermark" active={showWatermark} onPress={() => setShowWatermarkModal(true)} type="Feather" />
