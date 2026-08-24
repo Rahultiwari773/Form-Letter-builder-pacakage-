@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   SafeAreaView, View, ScrollView, TextInput, StyleSheet,
   Pressable, Image, Modal, Alert, Text as RNText, StatusBar, Platform, useWindowDimensions, TouchableOpacity, ActivityIndicator
@@ -13,7 +13,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 
 import html2pdf from "html2pdf.js";
-import Header from "./Header";
+
 
 
 const FontsProvider = { fontFamily: { regular: 'System', bold: 'System', semiBold: 'System', medium: 'System' } };
