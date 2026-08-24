@@ -1,0 +1,38 @@
+{
+  "name": "react-native-letter-builder",
+  "version": "1.0.0",
+  "description": "A reusable Letter Builder component for React Native / Expo",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "react-native",
+    "expo",
+    "letter",
+    "builder"
+  ],
+  "author": "",
+  "license": "ISC",
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*",
+    "react-native-gesture-handler": "*",
+    "react-native-reanimated": "*",
+    "@expo/vector-icons": "*",
+    "expo-print": "*",
+    "expo-sharing": "*",
+    "@react-native-async-storage/async-storage": "*",
+    "expo-image-picker": "*",
+    "expo-document-picker": "*",
+    "html2pdf.js": "*",
+    "pdfjs-dist": "*",
+    "mammoth": "*"
+  },
+  "types": "index.d.ts",
+  "files": [
+    "src",
+    "index.js",
+    "index.d.ts"
+  ]
+}

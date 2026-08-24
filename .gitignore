@@ -1,0 +1,6 @@
+node_modules/
+*.tgz
+apply_changes.js
+polish_ui.js
+improvements.js
+.DS_Store
