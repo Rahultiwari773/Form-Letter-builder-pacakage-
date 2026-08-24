@@ -16,7 +16,7 @@ import html2pdf from "html2pdf.js";
 
 
 
-const FontsProvider = { fontFamily: { regular: 'System', bold: 'System', semiBold: 'System', medium: 'System' } };
+const FontsProvider = { fontFamily: { regular: 'Inter', bold: 'Inter', semiBold: 'Inter', medium: 'Inter' } };
 import * as pdfjsLib from 'pdfjs-dist';
 import mammoth from 'mammoth';
 
