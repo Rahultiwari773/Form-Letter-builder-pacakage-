@@ -1,10 +1,11 @@
 {
   "name": "react-native-letter-builder",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "description": "A reusable Letter Builder component for React Native / Expo",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "cd \"../New test Letter builder npm/letter-builder-test\" && npm start"
   },
   "keywords": [
     "react-native",
