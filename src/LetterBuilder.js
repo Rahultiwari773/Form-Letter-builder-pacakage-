@@ -17,13 +17,8 @@ import html2pdf from "html2pdf.js";
 
 
 const FontsProvider = { fontFamily: { regular: 'Inter', bold: 'Inter', semiBold: 'Inter', medium: 'Inter' } };
-import * as pdfjsLib from 'pdfjs-dist';
+// PDF JS import completely removed to rely purely on CDN bypass and avoid ES module worker conflicts
 import mammoth from 'mammoth';
-
-
-if (typeof window !== 'undefined' && pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version || '3.11.174'}/pdf.worker.min.js`;
-}
 
 export const safeJSONParse = (data, fallback = null) => {
   if (!data) return fallback;
@@ -1192,7 +1187,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
       }
 
       // 3. Detect Table Headers & Rows
-      if (lower.includes("salary component") || lower.includes("monthly") || lower.includes("annual")) {
+      if (lower.includes("salary component") || (lower.includes("monthly") && lower.includes("annual") && (lower.includes("inr") || lower.includes("rs")))) {
         if (currentBodyLines.length > 0) {
           sections.push({
             id: `sec_scan_${Date.now()}_${idx}_b`,
@@ -1408,7 +1403,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
       }
 
       // 3. Detect Table Headers & Rows
-      if (lower.includes("salary component") || lower.includes("monthly") || lower.includes("annual")) {
+      if (lower.includes("salary component") || (lower.includes("monthly") && lower.includes("annual") && (lower.includes("inr") || lower.includes("rs")))) {
         if (currentBodyLines.length > 0) {
           scannedSections.push({
             id: `sec_scan_${Date.now()}_${idx}_b`,
@@ -1696,44 +1691,58 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
               const arrayBuffer = event.target.result;
               let extractedText = "";
 
-              // 1. Try pdfjsLib with disableWorker: true to avoid CORS blocks
+              // 1. Safely load PDF.js from CDN to bypass bundler/worker issues
+              const loadPdfJsFromCDN = async () => {
+                if (window.__stablePdfJsLib) return window.__stablePdfJsLib;
+                return new Promise((resolve, reject) => {
+                  const script = document.createElement('script');
+                  script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+                  script.onload = () => {
+                    if (window.pdfjsLib) {
+                      window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+                      window.__stablePdfJsLib = window.pdfjsLib; // Store in unique global
+                      resolve(window.__stablePdfJsLib);
+                    } else {
+                      reject(new Error("pdfjsLib not found on window after script load"));
+                    }
+                  };
+                  script.onerror = () => reject(new Error("Failed to load PDF.js from CDN"));
+                  document.head.appendChild(script);
+                });
+              };
+
               try {
-                if (pdfjsLib && pdfjsLib.getDocument) {
-                  const loadingTask = pdfjsLib.getDocument({
-                    data: new Uint8Array(arrayBuffer),
-                    disableWorker: true,
-                    isEvalSupported: false
-                  });
-                  const pdf = await loadingTask.promise;
-                  let fullText = [];
+                const pdfJs = await loadPdfJsFromCDN();
+                const loadingTask = pdfJs.getDocument({
+                  data: new Uint8Array(arrayBuffer)
+                });
+                const pdf = await loadingTask.promise;
+                let fullText = [];
 
-                  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-                    const page = await pdf.getPage(pageNum);
-                    const textContent = await page.getTextContent();
-                    const pageItems = textContent.items.map(item => item.str);
-                    fullText.push(pageItems.join(" "));
+                for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                  const page = await pdf.getPage(pageNum);
+                  const textContent = await page.getTextContent();
+                  let text = '';
+                  let lastY = null;
+                  for (let i = 0; i < textContent.items.length; i++) {
+                    const item = textContent.items[i];
+                    const currentY = item.transform ? item.transform[5] : null;
+                    if (lastY !== null && currentY !== null && Math.abs(currentY - lastY) > 3) {
+                      // Substantial vertical change means a new line or new paragraph
+                      text += '\n';
+                    } else if (lastY !== null) {
+                      // Same line, but might need a space if not ending in one
+                      // Often PDF.js handles spaces, but just in case:
+                    }
+                    text += item.str;
+                    lastY = currentY;
                   }
-                  extractedText = fullText.join("\n\n");
+                  fullText.push(text);
                 }
+                extractedText = fullText.join("\n\n");
               } catch (pdfJsErr) {
-                console.warn("pdfjsLib worker warning, trying stream decoder fallback:", pdfJsErr);
-              }
-
-              // 2. Fallback to Stream Decoder if pdfjsLib worker failed or returned empty
-              if (!extractedText || !extractedText.trim()) {
-                try {
-                  const decoder = new TextDecoder('utf-8');
-                  const rawString = decoder.decode(arrayBuffer);
-                  const matches = rawString.match(/\(([^()]{2,})\)/g);
-                  if (matches && matches.length > 0) {
-                    const strings = matches
-                      .map(m => m.slice(1, -1).trim())
-                      .filter(s => s.length > 0 && !s.startsWith('/') && !s.startsWith('%') && !s.includes('Font'));
-                    extractedText = strings.join('\n');
-                  }
-                } catch (decErr) {
-                  console.warn("PDF Stream decoder error:", decErr);
-                }
+                console.warn("PDF extraction error (CDN fallback also failed):", pdfJsErr);
+                extractedText = "PDF Extraction Failed. Please copy/paste text from the PDF manually.";
               }
 
               const cleanedText = cleanRawDocumentText(extractedText);
@@ -2627,34 +2636,39 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
     const content = generateWebPDFContent((sectionList && sectionList.length > 0) ? sectionList : sections, logoToUse, logoSize, translateX.value, translateY.value, showWatermark, watermarkOpacity, watermarkType, watermarkText);
 
     if (Platform.OS === "web") {
-      // âœ… WEB â†’ DOWNLOAD PDF
-      const element = document.createElement("div");
-      element.style.width = "210mm";
-      element.style.backgroundColor = "#ffffff";
-      element.style.color = "#1F2937";
-      element.innerHTML = content;
-
-      const opt = {
-        margin: [10, 10, 10, 10],
-        filename: `${docName.replace(/\s+/g, '_')}.pdf`,
-        image: { type: "jpeg", quality: 0.98 },
-        html2canvas: {
-          scale: 2,
-          useCORS: true,
-          logging: false,
-        },
-        jsPDF: {
-          unit: "mm",
-          format: "a4",
-          orientation: "portrait",
-        },
-        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
-      };
-
-      await html2pdf().set(opt).from(element).save();
+      // WEB: Use browser native print-to-PDF (most reliable approach)
+      const printWindow = window.open('', '_blank', 'width=900,height=1200');
+      if (printWindow) {
+        printWindow.document.open();
+        printWindow.document.write('<!DOCTYPE html><html><head><title>' + (docName || 'Letter') + '</title><style>@media print { body { margin: 0; padding: 0; } @page { size: A4; margin: 10mm; } } body { font-family: Segoe UI, Arial, sans-serif; color: #1F2937; margin: 0; padding: 0; background: #fff; }</style></head><body>' + content + '</body></html>');
+        printWindow.document.close();
+        printWindow.onload = function() {
+          setTimeout(function() {
+            printWindow.focus();
+            printWindow.print();
+          }, 500);
+        };
+        setTimeout(function() {
+          try { printWindow.focus(); printWindow.print(); } catch(e) { console.warn('Print fallback:', e); }
+        }, 2000);
+      } else {
+        // Fallback: iframe-based print
+        var iframe = document.createElement('iframe');
+        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+        document.body.appendChild(iframe);
+        var iDoc = iframe.contentDocument || iframe.contentWindow.document;
+        iDoc.open();
+        iDoc.write('<!DOCTYPE html><html><head><title>' + (docName || 'Letter') + '</title><style>@media print { body { margin: 0; padding: 0; } @page { size: A4; margin: 10mm; } } body { font-family: Segoe UI, Arial, sans-serif; color: #1F2937; margin: 0; padding: 0; background: #fff; }</style></head><body>' + content + '</body></html>');
+        iDoc.close();
+        setTimeout(function() {
+          iframe.contentWindow.focus();
+          iframe.contentWindow.print();
+          setTimeout(function() { document.body.removeChild(iframe); }, 3000);
+        }, 1000);
+      }
       if (onExport) onExport({ type: 'pdf' });
     } else {
-      // âœ… ANDROID / IOS
+      // ANDROID / IOS
       const { uri } = await Print.printToFileAsync({
         html: content,
         base64: false,
@@ -2670,45 +2684,117 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
     if (Platform.OS === "web" && item.logo) {
       logoToUse = await ensureBase64Image(item.logo);
     }
+
+    // Resolve sections: prefer sectionList array, fall back to sections object
+    let targetSections = (item.sectionList && item.sectionList.length > 0) ? item.sectionList : item.sections;
+
+    // If sections is an object (predefined templates), convert to array for reliable rendering
+    if (targetSections && !Array.isArray(targetSections)) {
+      targetSections = Object.keys(targetSections).map(k => ({
+        ...targetSections[k],
+        type: targetSections[k].type || k,
+        key: k
+      }));
+    }
+
     const content = generateWebPDFContent(
-      (item.sectionList && item.sectionList.length > 0) ? item.sectionList : item.sections,
+      targetSections,
       logoToUse,
       item.logoSize,
       (item.pos && item.pos.x !== undefined) ? item.pos.x : 40,
       (item.pos && item.pos.y !== undefined) ? item.pos.y : 20,
       item.showWatermark !== false,
-      item.watermarkOpacity || 0.08
+      item.watermarkOpacity || 0.08,
+      item.watermarkType || 'logo',
+      item.watermarkText || 'CONFIDENTIAL'
     );
 
     if (Platform.OS === "web") {
-      const container = document.createElement("div");
-      container.style.position = "absolute";
-      container.style.left = "-9999px";
-      container.style.top = "-9999px";
-      container.innerHTML = content;
-      document.body.appendChild(container);
+      // Primary approach: browser print-to-PDF (same reliable method as exportPDF)
+      const printWindow = window.open('', '_blank', 'width=900,height=1200');
+      if (printWindow) {
+        printWindow.document.open();
+        printWindow.document.write('<!DOCTYPE html><html><head><title>' + (item.docName || docName || 'Letter') + '</title><style>@media print { body { margin: 0; padding: 0; } @page { size: A4; margin: 10mm; } } body { font-family: Segoe UI, Arial, sans-serif; color: #1F2937; margin: 0; padding: 0; background: #fff; }</style></head><body>' + content + '</body></html>');
+        printWindow.document.close();
+        printWindow.onload = function() {
+          setTimeout(function() {
+            printWindow.focus();
+            printWindow.print();
+          }, 500);
+        };
+        setTimeout(function() {
+          try { printWindow.focus(); printWindow.print(); } catch(e) { console.warn('Print fallback:', e); }
+        }, 2000);
+      } else {
+        // Fallback: html2pdf with proper visible rendering (not off-screen)
+        const container = document.createElement("div");
+        container.style.position = "fixed";
+        container.style.left = "0";
+        container.style.top = "0";
+        container.style.width = "800px";
+        container.style.zIndex = "-1";
+        container.style.opacity = "0";
+        container.style.pointerEvents = "none";
+        container.style.overflow = "visible";
+        container.innerHTML = content;
+        document.body.appendChild(container);
 
-      await new Promise((res) => setTimeout(res, 250));
+        // Wait for images to fully load before rendering
+        const images = container.querySelectorAll('img');
+        if (images.length > 0) {
+          await Promise.all(Array.from(images).map(img => {
+            if (img.complete) return Promise.resolve();
+            return new Promise((resolve) => {
+              img.onload = resolve;
+              img.onerror = resolve;
+              setTimeout(resolve, 3000); // Max 3s wait per image
+            });
+          }));
+        }
+        await new Promise((res) => setTimeout(res, 500));
 
-      await html2pdf()
-        .from(container)
-        .set({
-          margin: 0,
-          filename: `${item.docName || docName}.pdf`,
-          html2canvas: {
-            scale: 2,
-            useCORS: true,
-            logging: false
-          },
-          jsPDF: {
-            unit: "mm",
-            format: "a4",
-            orientation: "portrait",
-          },
-        })
-        .save();
+        try {
+          await html2pdf()
+            .from(container)
+            .set({
+              margin: [10, 0, 10, 0],
+              filename: `${item.docName || docName}.pdf`,
+              html2canvas: {
+                scale: 2,
+                useCORS: true,
+                logging: false,
+                width: 800,
+                windowWidth: 800,
+                scrollX: 0,
+                scrollY: 0
+              },
+              jsPDF: {
+                unit: "mm",
+                format: "a4",
+                orientation: "portrait",
+              },
+              pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
+            })
+            .save();
+        } catch (pdfErr) {
+          console.warn('html2pdf fallback failed:', pdfErr);
+          // Last resort: iframe print
+          var iframe = document.createElement('iframe');
+          iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+          document.body.appendChild(iframe);
+          var iDoc = iframe.contentDocument || iframe.contentWindow.document;
+          iDoc.open();
+          iDoc.write('<!DOCTYPE html><html><head><title>' + (item.docName || docName || 'Letter') + '</title><style>@media print { body { margin: 0; padding: 0; } @page { size: A4; margin: 10mm; } } body { font-family: Segoe UI, Arial, sans-serif; color: #1F2937; margin: 0; padding: 0; background: #fff; }</style></head><body>' + content + '</body></html>');
+          iDoc.close();
+          setTimeout(function() {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+            setTimeout(function() { document.body.removeChild(iframe); }, 3000);
+          }, 1000);
+        }
 
-      document.body.removeChild(container);
+        document.body.removeChild(container);
+      }
     }
   };
 
@@ -5217,8 +5303,8 @@ export const generateWebPDFContent = (targetSections, targetLogo, targetLogoSize
       font-family: 'Segoe UI', Arial, sans-serif;
       color: #1F2937;
       padding: 50px;
-      width: 210mm;
-      min-height: 297mm;
+      width: 800px;
+      min-height: 1131px;
       box-sizing: border-box;
       background-color: #ffffff;
       line-height: 1.4;
