@@ -1,6 +1,6 @@
 {
   "name": "react-native-letter-builder",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "A reusable Letter Builder component for React Native / Expo",
   "main": "index.js",
   "scripts": {
