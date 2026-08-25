@@ -72,4 +72,3 @@ file = file.replace(
 );
 
 fs.writeFileSync('src/LetterBuilder.js', file);
-console.log("UI Buttons updated!");

@@ -49,7 +49,6 @@ export default function App() {
   };
 
   const handleExport = (exportData) => {
-    console.log("PDF Exported!", exportData);
   };
 
   return (
@@ -59,7 +58,6 @@ export default function App() {
       onSave={handleSave}
       onUpdate={handleUpdate}
       onExport={handleExport}
-      // initialTemplate={{ ... }} // Optionally pass a preset template
     />
   );
 }

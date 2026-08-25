@@ -25,6 +25,16 @@ if (typeof window !== 'undefined' && pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version || '3.11.174'}/pdf.worker.min.js`;
 }
 
+export const safeJSONParse = (data, fallback = null) => {
+  if (!data) return fallback;
+  try {
+    return JSON.parse(data);
+  } catch (e) {
+    console.warn("safeJSONParse failed:", e.message);
+    return fallback;
+  }
+};
+
 export const formatCssDimension = (value, defaultUnit = 'px') => {
   if (value === undefined || value === null || value === '') return '';
   const str = String(value).trim();
@@ -762,7 +772,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
     try {
       const savedForms = await AsyncStorage.getItem(FORMS_STORAGE_KEY);
       if (savedForms) {
-        setFormsList(JSON.parse(savedForms));
+        setFormsList(safeJSONParse(savedForms, []));
       }
     } catch (error) {
       console.error('Error loading forms:', error);
@@ -794,7 +804,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
     try {
       const savedForms = await AsyncStorage.getItem(FORMS_STORAGE_KEY);
       if (savedForms) {
-        const forms = JSON.parse(savedForms);
+        const forms = safeJSONParse(savedForms, []);
         const updated = forms.filter(f => f.id !== formId);
         await AsyncStorage.setItem(FORMS_STORAGE_KEY, JSON.stringify(updated));
         setFormsList(updated);
@@ -833,6 +843,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
   const [logoSize, setLogoSize] = useState(80);
   const [customLogos, setCustomLogos] = useState([]);
   const [showPreview, setShowPreview] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
 
   const [showLogoSelector, setShowLogoSelector] = useState(false);
   const [fontFamily, setFontFamily] = useState('sans-serif');
@@ -1564,7 +1575,8 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
       console.log("[BACKEND SYNC] Transmitting template payload to API:", docData);
 
       let response = null;
-      const saveAction = docData.id ? onUpdate : onSave;
+      const isLocalNew = typeof docData.id === 'string' && docData.id.length === 13 && !isNaN(Number(docData.id));
+      const saveAction = (docData.id && !isLocalNew && !String(docData.id).startsWith('predefined_')) ? onUpdate : (onSave || onUpdate);
       if (saveAction) {
         response = await saveAction(docData).catch((error) => {
           console.warn("Error calling save/update action:", error);
@@ -1637,7 +1649,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
 
     try {
       const existingLib = await AsyncStorage.getItem("letter_library_list");
-      let libArray = existingLib ? JSON.parse(existingLib) : [];
+      let libArray = safeJSONParse(existingLib, []);
       libArray.push(uploadedDocData);
       await AsyncStorage.setItem("letter_library_list", JSON.stringify(libArray));
       setSavedLibrary(libArray);
@@ -1829,9 +1841,8 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
           pageBorder,
           isDraft: true
         };
-        console.log("docdata ", docData)
         const existingLib = await AsyncStorage.getItem("letter_library_list");
-        let libArray = existingLib ? JSON.parse(existingLib) : [];
+        let libArray = safeJSONParse(existingLib, []);
 
         const existingIdx = libArray.findIndex(t => t.id === templateId);
         if (existingIdx > -1) {
@@ -1954,6 +1965,20 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
     setShowTemplates(false);
   };
 
+  const insertVariableIntoActiveSection = (varName) => {
+    if (!activeSection) {
+      Alert.alert("No Section Selected", "Please click on a text block on the canvas first to insert this variable.");
+      return;
+    }
+    setSectionList(prevList => prevList.map(item => {
+      const secId = item.id || item.type;
+      if (secId === activeSection && typeof item.content === 'string') {
+        return { ...item, content: item.content + ` {{${varName}}}` };
+      }
+      return item;
+    }));
+  };
+
   const applyTemplate = (templateKey) => {
     if (templateKey === 'blank') {
       handleNewBlankTemplate();
@@ -2043,7 +2068,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
       if (lastActiveId) {
         const data = await AsyncStorage.getItem("letter_library_list");
         if (data) {
-          const libArray = JSON.parse(data);
+          const libArray = safeJSONParse(data, []);
           const lastItem = libArray.find(item => item.id === lastActiveId);
           if (lastItem) {
             setCurrentTemplateId(lastItem.id);
@@ -2076,7 +2101,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
     try {
       const savedDetails = await AsyncStorage.getItem("letter_builder_company_details");
       if (savedDetails) {
-        const parsed = JSON.parse(savedDetails);
+        const parsed = safeJSONParse(savedDetails, {});
         setCompanyInfo(parsed);
       }
     } catch (e) {
@@ -2088,7 +2113,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
     setIsFetchingLibrary(true);
     try {
       const data = await AsyncStorage.getItem("letter_library_list");
-      let libArray = data ? JSON.parse(data) : [];
+      let libArray = safeJSONParse(data, []);
 
       const predefinedList = Object.keys(templates).map((key) => ({
         id: `predefined_${key}`,
@@ -2112,20 +2137,28 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
       // Fetch from backend API
       try {
         let res = null;
-        if (apiConfig.fetchDocuments) {
-          res = await apiConfig.fetchDocuments().catch((error) => {
+        if (apiConfig && apiConfig.fetchDocuments) {
+          try {
+            res = await apiConfig.fetchDocuments();
+            if (res && typeof res.json === 'function') {
+              res = await res.json();
+            } else if (res && res.data) {
+              res = res.data;
+            }
+          } catch (error) {
             console.warn("Error calling apiConfig.fetchDocuments:", error);
             if (Platform.OS === 'web') {
               window.alert('Failed to load library documents. Please check your connection.');
             } else {
               Alert.alert('Error', 'Failed to load library documents. Please check your connection.');
             }
-            return null;
-          });
+            res = null;
+          }
         }
 
-        if (res && res.data) {
-          const backendTemplates = Array.isArray(res.data) ? res.data : (res.data.data || []);
+        if (res) {
+          const resData = res.data || res;
+          const backendTemplates = Array.isArray(resData) ? resData : (resData.data || []);
           backendTemplates.forEach(bt => {
             const formatted = {
               id: bt.templateId || bt.id,
@@ -2159,6 +2192,8 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
       setSavedLibrary(libArray);
     } catch (err) {
       console.error("Error fetching library:", err);
+    } finally {
+      setIsFetchingLibrary(false);
     }
   };
 
@@ -2291,7 +2326,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
     };
 
     const existingLib = await AsyncStorage.getItem("letter_library_list");
-    let libArray = existingLib ? JSON.parse(existingLib) : [];
+    let libArray = safeJSONParse(existingLib, []);
 
     const existingIdx = libArray.findIndex(t => t.id === templateId);
     if (existingIdx > -1) {
@@ -2386,7 +2421,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
       };
 
       const savedForms = await AsyncStorage.getItem(FORMS_STORAGE_KEY);
-      let forms = savedForms ? JSON.parse(savedForms) : [];
+      let forms = safeJSONParse(savedForms, []);
       forms.push(newForm);
 
       await AsyncStorage.setItem(FORMS_STORAGE_KEY, JSON.stringify(forms));
@@ -2459,7 +2494,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
     };
 
     const existingLib = await AsyncStorage.getItem("letter_library_list");
-    let libArray = existingLib ? JSON.parse(existingLib) : [];
+    let libArray = safeJSONParse(existingLib, []);
 
     const existingIdx = libArray.findIndex(t => t.id === templateId);
     if (existingIdx > -1) {
@@ -2476,9 +2511,11 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
     Alert.alert("Draft Saved", `Draft "${docName}" saved locally!`);
   };
 
-  const deleteFromLibrary = async (id) => {
+  const executeDeleteFromLibrary = async (id) => {
     try {
-      (onDeleteDocument ? (apiConfig.deleteDocument ? await apiConfig.deleteDocument(id) : null) : null);
+      if (apiConfig && apiConfig.deleteDocument) {
+        await apiConfig.deleteDocument(id);
+      }
     } catch (error) {
       console.warn("Failed to delete document from backend API", error);
     }
@@ -2490,6 +2527,10 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
     if (lastActiveId === id) {
       await AsyncStorage.removeItem("letter_builder_last_active_id");
     }
+  };
+
+  const deleteFromLibrary = (id) => {
+    setDeleteConfirmId(id);
   };
   const loadFromLibrary = (item) => {
     setCurrentTemplateId(item.id);
@@ -2583,7 +2624,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
     if (Platform.OS === "web" && logo) {
       logoToUse = await ensureBase64Image(logo);
     }
-    const content = generateWebPDFContent(sections, logoToUse, logoSize, translateX.value, translateY.value, showWatermark, watermarkOpacity, watermarkType, watermarkText);
+    const content = generateWebPDFContent((sectionList && sectionList.length > 0) ? sectionList : sections, logoToUse, logoSize, translateX.value, translateY.value, showWatermark, watermarkOpacity, watermarkType, watermarkText);
 
     if (Platform.OS === "web") {
       // âœ… WEB â†’ DOWNLOAD PDF
@@ -2630,7 +2671,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
       logoToUse = await ensureBase64Image(item.logo);
     }
     const content = generateWebPDFContent(
-      item.sections,
+      (item.sectionList && item.sectionList.length > 0) ? item.sectionList : item.sections,
       logoToUse,
       item.logoSize,
       (item.pos && item.pos.x !== undefined) ? item.pos.x : 40,
@@ -3043,6 +3084,29 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
                       </View>
                     </View>
 
+                    {variables && Object.keys(variables).length > 0 && (
+                      <View style={{ marginBottom: 20 }}>
+                        <Text weight="700" style={styles.sidebarTitle}>+ DYNAMIC VARIABLES</Text>
+                        <Text style={{ fontSize: 10, color: '#64748B', marginBottom: 8, lineHeight: 14 }}>Click a variable to insert it into the selected section.</Text>
+                        <View style={{ gap: 4 }}>
+                          {Object.keys(variables).map(varName => (
+                            <Pressable
+                              key={varName}
+                              onPress={() => insertVariableIntoActiveSection(varName)}
+                              style={{
+                                flexDirection: 'row', alignItems: 'center',
+                                backgroundColor: '#F8FAFC', paddingVertical: 7, paddingHorizontal: 10,
+                                borderRadius: 6, borderWidth: 1, borderColor: '#E2E8F0', marginBottom: 4
+                              }}
+                            >
+                              <Feather name="code" size={14} color="#6366F1" style={{ marginRight: 8 }} />
+                              <Text style={{ fontSize: 12, fontWeight: '600', color: '#334155' }}>{varName}</Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                      </View>
+                    )}
+
                     {/* CANVAS STRUCTURE PANEL */}
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                       <Text weight="700" style={styles.sidebarTitle}>CANVAS SECTIONS ({sectionList.length})</Text>
@@ -3194,20 +3258,20 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
                       } : {})}
                     >
                       {showWatermark && (
-                        <View pointerEvents="none" style={[styles.watermarkContainer, { justifyContent: watermarkAlignment.includes('top') ? 'flex-start' : watermarkAlignment.includes('bottom') ? 'flex-end' : 'center', alignItems: watermarkAlignment.includes('left') ? 'flex-start' : watermarkAlignment.includes('right') ? 'flex-end' : 'center', padding: 40 }]}>
+                        <View style={[{ pointerEvents: 'none' }, styles.watermarkContainer, { justifyContent: watermarkAlignment.includes('top') ? 'flex-start' : watermarkAlignment.includes('bottom') ? 'flex-end' : 'center', alignItems: watermarkAlignment.includes('left') ? 'flex-start' : watermarkAlignment.includes('right') ? 'flex-end' : 'center', padding: 40 }]}>
                           {watermarkType === 'text' && watermarkText ? (
                             <View style={{ transform: [{ rotate: '-45deg' }], opacity: watermarkOpacity, width: '100%', alignItems: 'center' }}>
                               <RNText style={{ fontSize: 70, fontWeight: 'bold', color: '#000', textAlign: 'center' }}>{watermarkText}</RNText>
                             </View>
                           ) : logo ? (
-                            <Image source={{ uri: logo }} style={[styles.watermarkImage, { opacity: watermarkOpacity }]} />
+                            <Image source={{ uri: logo }} resizeMode="contain" style={[styles.watermarkImage, { opacity: watermarkOpacity }]} />
                           ) : null}
                         </View>
                       )}
                       {i === 0 && logo && (
                         <GestureDetector gesture={panGesture}>
                           <Animated.View style={[styles.floatingLogo, animatedLogoStyle, { width: logoSize, height: logoSize }]}>
-                            <Image source={{ uri: logo }} style={styles.fullImg} />
+                            <Image source={{ uri: logo }} style={styles.fullImg} resizeMode="contain" />
                             <View style={styles.dragHandle}><MaterialIcons name="open-with" size={10} color="white" /></View>
                           </Animated.View>
                         </GestureDetector>
@@ -3441,70 +3505,71 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
                                     />
                                   )}
 
+                                  {isSelected && (
+                                    <HeaderBarWrapper {...headerDragProps}>
+                                      <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+                                        <Pressable
+                                          onPress={(e) => { if (e && e.stopPropagation) e.stopPropagation(); moveSectionUp(idx); }}
+                                          disabled={idx === 0}
+                                          style={{ padding: 4, opacity: idx === 0 ? 0.3 : 1 }}
+                                        >
+                                          <Feather name="arrow-up" size={14} color="#1E293B" />
+                                        </Pressable>
+                                        <Pressable
+                                          onPress={(e) => { if (e && e.stopPropagation) e.stopPropagation(); moveSectionDown(idx); }}
+                                          disabled={idx === sectionList.length - 1}
+                                          style={{ padding: 4, opacity: idx === sectionList.length - 1 ? 0.3 : 1 }}
+                                        >
+                                          <Feather name="arrow-down" size={14} color="#1E293B" />
+                                        </Pressable>
+                                        <Text style={{ fontSize: 11, fontWeight: '700', color: '#1E40AF' }}>{item.label || 'TABLE'}</Text>
+                                        <View style={{ width: 1, height: 14, backgroundColor: '#BFDBFE', marginHorizontal: 2 }} />
+                                        <Pressable onPress={(e) => { e.stopPropagation(); addTableColumn(idx); }} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: '#CBD5E1' }}>
+                                          <Feather name="plus" size={10} color="#0078d4" style={{ marginRight: 2 }} />
+                                          <Text style={{ fontSize: 10, fontWeight: '600', color: '#0078d4' }}>Col</Text>
+                                        </Pressable>
+                                        <Pressable onPress={(e) => { e.stopPropagation(); removeTableColumn(idx); }} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: '#CBD5E1' }}>
+                                          <Feather name="minus" size={10} color="#EF4444" style={{ marginRight: 2 }} />
+                                          <Text style={{ fontSize: 10, fontWeight: '600', color: '#EF4444' }}>Col</Text>
+                                        </Pressable>
+                                        <Pressable onPress={(e) => { e.stopPropagation(); addTableRow(idx); }} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: '#CBD5E1' }}>
+                                          <Feather name="plus" size={10} color="#0078d4" style={{ marginRight: 2 }} />
+                                          <Text style={{ fontSize: 10, fontWeight: '600', color: '#0078d4' }}>Row</Text>
+                                        </Pressable>
+                                        <Pressable onPress={(e) => { e.stopPropagation(); removeTableRow(idx); }} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: '#CBD5E1' }}>
+                                          <Feather name="minus" size={10} color="#EF4444" style={{ marginRight: 2 }} />
+                                          <Text style={{ fontSize: 10, fontWeight: '600', color: '#EF4444' }}>Row</Text>
+                                        </Pressable>
+                                      </View>
+                                      <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                                        <Pressable
+                                          onPress={(e) => {
+                                            if (e && e.stopPropagation) e.stopPropagation();
+                                            setSectionList(prev => prev.map((sec, i) =>
+                                              i === idx ? { ...sec, enabled: !sec.enabled } : sec
+                                            ));
+                                          }}
+                                          style={{ padding: 3 }}
+                                        >
+                                          <Text style={{ fontSize: 11, fontWeight: '600', color: item.enabled ? '#EF4444' : '#3B82F6' }}>{item.enabled ? 'Disable' : 'Enable'}</Text>
+                                        </Pressable>
+                                        <Pressable
+                                          onPress={(e) => { if (e && e.stopPropagation) e.stopPropagation(); duplicateSectionItem(idx); }}
+                                          style={{ padding: 3 }}
+                                        >
+                                          <Text style={{ fontSize: 11, fontWeight: '600', color: '#0078d4' }}>Duplicate</Text>
+                                        </Pressable>
+                                        <Pressable
+                                          onPress={(e) => { if (e && e.stopPropagation) e.stopPropagation(); removeSectionItem(idx); }}
+                                          style={{ padding: 3 }}
+                                        >
+                                          <Feather name="trash-2" size={13} color="#EF4444" />
+                                        </Pressable>
+                                      </View>
+                                    </HeaderBarWrapper>
+                                  )}
+
                                   <View style={[{ borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, overflow: 'hidden', backgroundColor: 'white' }, isSelected ? styles.activeInput : styles.inactiveInput]}>
-                                    {isSelected && (
-                                      <HeaderBarWrapper {...headerDragProps}>
-                                        <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
-                                          <Pressable
-                                            onPress={(e) => { if (e && e.stopPropagation) e.stopPropagation(); moveSectionUp(idx); }}
-                                            disabled={idx === 0}
-                                            style={{ padding: 4, opacity: idx === 0 ? 0.3 : 1 }}
-                                          >
-                                            <Feather name="arrow-up" size={14} color="#1E293B" />
-                                          </Pressable>
-                                          <Pressable
-                                            onPress={(e) => { if (e && e.stopPropagation) e.stopPropagation(); moveSectionDown(idx); }}
-                                            disabled={idx === sectionList.length - 1}
-                                            style={{ padding: 4, opacity: idx === sectionList.length - 1 ? 0.3 : 1 }}
-                                          >
-                                            <Feather name="arrow-down" size={14} color="#1E293B" />
-                                          </Pressable>
-                                          <Text style={{ fontSize: 11, fontWeight: '700', color: '#1E40AF' }}>{item.label || 'TABLE'}</Text>
-                                          <View style={{ width: 1, height: 14, backgroundColor: '#BFDBFE', marginHorizontal: 2 }} />
-                                          <Pressable onPress={(e) => { e.stopPropagation(); addTableColumn(idx); }} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: '#CBD5E1' }}>
-                                            <Feather name="plus" size={10} color="#0078d4" style={{ marginRight: 2 }} />
-                                            <Text style={{ fontSize: 10, fontWeight: '600', color: '#0078d4' }}>Col</Text>
-                                          </Pressable>
-                                          <Pressable onPress={(e) => { e.stopPropagation(); removeTableColumn(idx); }} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: '#CBD5E1' }}>
-                                            <Feather name="minus" size={10} color="#EF4444" style={{ marginRight: 2 }} />
-                                            <Text style={{ fontSize: 10, fontWeight: '600', color: '#EF4444' }}>Col</Text>
-                                          </Pressable>
-                                          <Pressable onPress={(e) => { e.stopPropagation(); addTableRow(idx); }} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: '#CBD5E1' }}>
-                                            <Feather name="plus" size={10} color="#0078d4" style={{ marginRight: 2 }} />
-                                            <Text style={{ fontSize: 10, fontWeight: '600', color: '#0078d4' }}>Row</Text>
-                                          </Pressable>
-                                          <Pressable onPress={(e) => { e.stopPropagation(); removeTableRow(idx); }} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: '#CBD5E1' }}>
-                                            <Feather name="minus" size={10} color="#EF4444" style={{ marginRight: 2 }} />
-                                            <Text style={{ fontSize: 10, fontWeight: '600', color: '#EF4444' }}>Row</Text>
-                                          </Pressable>
-                                        </View>
-                                        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-                                          <Pressable
-                                            onPress={(e) => {
-                                              if (e && e.stopPropagation) e.stopPropagation();
-                                              setSectionList(prev => prev.map((sec, i) =>
-                                                i === idx ? { ...sec, enabled: !sec.enabled } : sec
-                                              ));
-                                            }}
-                                            style={{ padding: 3 }}
-                                          >
-                                            <Text style={{ fontSize: 11, fontWeight: '600', color: item.enabled ? '#EF4444' : '#3B82F6' }}>{item.enabled ? 'Disable' : 'Enable'}</Text>
-                                          </Pressable>
-                                          <Pressable
-                                            onPress={(e) => { if (e && e.stopPropagation) e.stopPropagation(); duplicateSectionItem(idx); }}
-                                            style={{ padding: 3 }}
-                                          >
-                                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#0078d4' }}>Duplicate</Text>
-                                          </Pressable>
-                                          <Pressable
-                                            onPress={(e) => { if (e && e.stopPropagation) e.stopPropagation(); removeSectionItem(idx); }}
-                                            style={{ padding: 3 }}
-                                          >
-                                            <Feather name="trash-2" size={13} color="#EF4444" />
-                                          </Pressable>
-                                        </View>
-                                      </HeaderBarWrapper>
-                                    )}
                                     {s.enabled && (
                                       <View style={{ padding: 10 }} onTouchStart={() => setActiveSection(secId)}>
                                         <View style={{ flexDirection: 'row', borderBottomWidth: 2, borderColor: '#CBD5E1', paddingBottom: 4, marginBottom: 4 }}>
@@ -3680,13 +3745,13 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
                                   </HeaderBarWrapper>
                                 )}
                                 {item.type === 'formSubmit' ? (
-                                  <View pointerEvents="none" style={{ marginVertical: 8, width: '100%', alignItems: item.align || 'center' }}>
+                                  <View style={{ pointerEvents: 'none',  marginVertical: 8, width: '100%', alignItems: item.align || 'center' }}>
                                     <View style={{ backgroundColor: '#2563EB', paddingVertical: 10, paddingHorizontal: 24, borderRadius: 6 }}>
                                       <RNText style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 14 }}>{item.content || 'Submit Form'}</RNText>
                                     </View>
                                   </View>
                                 ) : item.type === 'formInput' ? (
-                                  <View pointerEvents="none" style={{ marginVertical: 8, width: '100%' }}>
+                                  <View style={{ pointerEvents: 'none',  marginVertical: 8, width: '100%' }}>
                                     {item.label !== false && <RNText style={{ fontSize: 13, fontWeight: '600', color: '#334155', marginBottom: 6 }}>{item.fieldLabel || 'Text Input'} {item.required && <RNText style={{ color: 'red' }}>*</RNText>}</RNText>}
                                     <TextInput
                                       style={{ backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#CBD5E1', borderRadius: 6, padding: 10, fontSize: 14, color: '#334155' }}
@@ -3695,7 +3760,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
                                     />
                                   </View>
                                 ) : item.type === 'formTextArea' ? (
-                                  <View pointerEvents="none" style={{ marginVertical: 8, width: '100%' }}>
+                                  <View style={{ pointerEvents: 'none',  marginVertical: 8, width: '100%' }}>
                                     {item.label !== false && <RNText style={{ fontSize: 13, fontWeight: '600', color: '#334155', marginBottom: 6 }}>{item.fieldLabel || 'Text Area'} {item.required && <RNText style={{ color: 'red' }}>*</RNText>}</RNText>}
                                     <TextInput
                                       style={{ backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#CBD5E1', borderRadius: 6, padding: 10, fontSize: 14, color: '#334155', height: 80, textAlignVertical: 'top' }}
@@ -3705,7 +3770,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
                                     />
                                   </View>
                                 ) : item.type === 'formFileUpload' ? (
-                                  <View pointerEvents="none" style={{ marginVertical: 8, width: '100%' }}>
+                                  <View style={{ pointerEvents: 'none',  marginVertical: 8, width: '100%' }}>
                                     {item.label !== false && <RNText style={{ fontSize: 13, fontWeight: '600', color: '#334155', marginBottom: 6 }}>{item.fieldLabel || 'File Upload'} {item.required && <RNText style={{ color: 'red' }}>*</RNText>}</RNText>}
                                     <View style={{ alignItems: 'center', justifyContent: 'center', backgroundColor: '#F8FAFC', borderWidth: 1, borderStyle: 'dashed', borderColor: '#CBD5E1', borderRadius: 6, padding: 20 }}>
                                       <Feather name="upload-cloud" size={24} color="#94A3B8" style={{ marginBottom: 8 }} />
@@ -3713,14 +3778,14 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
                                     </View>
                                   </View>
                                 ) : item.type === 'formToggle' ? (
-                                  <View pointerEvents="none" style={{ marginVertical: 8, width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                                  <View style={{ pointerEvents: 'none',  marginVertical: 8, width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                                     {item.label !== false && <RNText style={{ fontSize: 13, fontWeight: '600', color: '#334155' }}>{item.fieldLabel || 'Toggle Switch'} {item.required && <RNText style={{ color: 'red' }}>*</RNText>}</RNText>}
                                     <View style={{ width: 44, height: 24, borderRadius: 12, backgroundColor: '#E2E8F0', padding: 2, justifyContent: 'center' }}>
                                       <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 1, elevation: 2 }} />
                                     </View>
                                   </View>
                                 ) : item.type === 'formRating' ? (
-                                  <View pointerEvents="none" style={{ marginVertical: 8, width: '100%' }}>
+                                  <View style={{ pointerEvents: 'none',  marginVertical: 8, width: '100%' }}>
                                     {item.label !== false && <RNText style={{ fontSize: 13, fontWeight: '600', color: '#334155', marginBottom: 6 }}>{item.fieldLabel || 'Rating'} {item.required && <RNText style={{ color: 'red' }}>*</RNText>}</RNText>}
                                     <View style={{ flexDirection: 'row', gap: 8 }}>
                                       {[1, 2, 3, 4, 5].map((star) => (
@@ -3729,7 +3794,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
                                     </View>
                                   </View>
                                 ) : item.type === 'formDatePicker' ? (
-                                  <View pointerEvents="none" style={{ marginVertical: 8, width: '100%' }}>
+                                  <View style={{ pointerEvents: 'none',  marginVertical: 8, width: '100%' }}>
                                     {item.label !== false && <RNText style={{ fontSize: 13, fontWeight: '600', color: '#334155', marginBottom: 6 }}>{item.fieldLabel || 'Date Picker'} {item.required && <RNText style={{ color: 'red' }}>*</RNText>}</RNText>}
                                     <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#CBD5E1', borderRadius: 6, padding: 10 }}>
                                       <Feather name="calendar" size={16} color="#94A3B8" style={{ marginRight: 8 }} />
@@ -3737,7 +3802,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
                                     </View>
                                   </View>
                                 ) : item.type === 'formRadio' ? (
-                                  <View pointerEvents="none" style={{ marginVertical: 8, width: '100%' }}>
+                                  <View style={{ pointerEvents: 'none',  marginVertical: 8, width: '100%' }}>
                                     {item.label !== false && <RNText style={{ fontSize: 13, fontWeight: '600', color: '#334155', marginBottom: 8 }}>{item.fieldLabel || 'Select an option'} {item.required && <RNText style={{ color: 'red' }}>*</RNText>}</RNText>}
                                     <View style={{ gap: 8 }}>
                                       {(item.options && item.options.length > 0 ? item.options : ['Option 1', 'Option 2']).map((opt, i) => (
@@ -3749,7 +3814,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
                                     </View>
                                   </View>
                                 ) : item.type === 'formCheckbox' ? (
-                                  <View pointerEvents="none" style={{ marginVertical: 8, width: '100%' }}>
+                                  <View style={{ pointerEvents: 'none',  marginVertical: 8, width: '100%' }}>
                                     {item.label !== false && <RNText style={{ fontSize: 13, fontWeight: '600', color: '#334155', marginBottom: 8 }}>{item.fieldLabel || 'Select options'} {item.required && <RNText style={{ color: 'red' }}>*</RNText>}</RNText>}
                                     <View style={{ gap: 8 }}>
                                       {(item.options && item.options.length > 0 ? item.options : ['Option 1', 'Option 2']).map((opt, i) => (
@@ -3761,7 +3826,7 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
                                     </View>
                                   </View>
                                 ) : item.type === 'formDropdown' ? (
-                                  <View pointerEvents="none" style={{ marginVertical: 8, width: '100%' }}>
+                                  <View style={{ pointerEvents: 'none',  marginVertical: 8, width: '100%' }}>
                                     {item.label !== false && <RNText style={{ fontSize: 13, fontWeight: '600', color: '#334155', marginBottom: 6 }}>{item.fieldLabel || 'Dropdown'} {item.required && <RNText style={{ color: 'red' }}>*</RNText>}</RNText>}
                                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#CBD5E1', borderRadius: 6, padding: 10 }}>
                                       <RNText style={{ color: '#94A3B8', fontSize: 14 }}>{item.placeholder || 'Select from list'}</RNText>
@@ -4345,6 +4410,40 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
               </View>
             </Modal>
 
+            {/* DELETE CONFIRMATION MODAL */}
+            <Modal visible={!!deleteConfirmId} transparent={true} animationType="fade">
+              <View style={[styles.modalOverlay, { zIndex: 9999 }]}>
+                <View style={[styles.modalContent, { width: 400, maxWidth: '90%', backgroundColor: '#FFFFFF', borderRadius: 12, overflow: 'hidden', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 }]}>
+                  <View style={styles.modalHeader}>
+                    <Text weight="700" style={styles.modalTitle}>Delete Template</Text>
+                    <Pressable onPress={() => setDeleteConfirmId(null)}>
+                      <Feather name="x" size={24} color="#64748B" />
+                    </Pressable>
+                  </View>
+                  <View style={{ padding: 20 }}>
+                    <Text style={{ fontSize: 16, color: '#334155', marginBottom: 20 }}>Are you sure you want to delete this template? This action cannot be undone.</Text>
+                    <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 12 }}>
+                      <Pressable 
+                        style={{ paddingVertical: 10, paddingHorizontal: 16, borderRadius: 6, backgroundColor: '#F1F5F9' }} 
+                        onPress={() => setDeleteConfirmId(null)}
+                      >
+                        <Text style={{ fontWeight: '600', color: '#475569' }}>Cancel</Text>
+                      </Pressable>
+                      <Pressable 
+                        style={{ paddingVertical: 10, paddingHorizontal: 16, borderRadius: 6, backgroundColor: '#EF4444' }} 
+                        onPress={() => {
+                          executeDeleteFromLibrary(deleteConfirmId);
+                          setDeleteConfirmId(null);
+                        }}
+                      >
+                        <Text style={{ fontWeight: '600', color: '#FFFFFF' }}>Delete</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                </View>
+              </View>
+            </Modal>
+
             {/* DOCUMENT PREVIEW MODAL */}
             <Modal visible={showPreview} transparent={true} animationType="fade">
               <View style={styles.modalOverlay}>
@@ -4460,13 +4559,13 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
                     >
                       <View style={styles.a4Page} collapsable={false} ref={previewPdfRef}>
                         {showWatermark && (
-                          <View pointerEvents="none" style={[styles.watermarkContainer, { justifyContent: watermarkAlignment.includes('top') ? 'flex-start' : watermarkAlignment.includes('bottom') ? 'flex-end' : 'center', alignItems: watermarkAlignment.includes('left') ? 'flex-start' : watermarkAlignment.includes('right') ? 'flex-end' : 'center', padding: 40 }]}>
+                          <View style={[{ pointerEvents: 'none' }, styles.watermarkContainer, { justifyContent: watermarkAlignment.includes('top') ? 'flex-start' : watermarkAlignment.includes('bottom') ? 'flex-end' : 'center', alignItems: watermarkAlignment.includes('left') ? 'flex-start' : watermarkAlignment.includes('right') ? 'flex-end' : 'center', padding: 40 }]}>
                             {watermarkType === 'text' && watermarkText ? (
                               <View style={{ transform: [{ rotate: '-45deg' }], opacity: watermarkOpacity, width: '100%', alignItems: 'center' }}>
                                 <RNText style={{ fontSize: 70, fontWeight: 'bold', color: '#000', textAlign: 'center' }}>{watermarkText}</RNText>
                               </View>
                             ) : logo ? (
-                              <Image source={{ uri: logo }} style={[styles.watermarkImage, { opacity: watermarkOpacity }]} />
+                              <Image source={{ uri: logo }} resizeMode="contain" style={[styles.watermarkImage, { opacity: watermarkOpacity }]} />
                             ) : null}
                           </View>
                         )}
@@ -4557,16 +4656,30 @@ export default function LetterEditorPro({ apiConfig = {}, variables = {}, initia
 
                                   {item.type === 'formDatePicker' && (
                                     <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: isErr ? '#EF4444' : '#CBD5E1', borderRadius: 6, padding: 8 }}>
-                                      <Feather name="calendar" size={16} color="#64748B" style={{ marginRight: 8 }} />
-                                      <TextInput
-                                        style={{ flex: 1, fontSize: 14, color: '#0F172A', outlineStyle: 'none' }}
-                                        placeholder={item.placeholder || 'YYYY-MM-DD'}
-                                        value={formValues[item.id] || ''}
-                                        onChangeText={(t) => {
-                                          setFormValues(prev => ({ ...prev, [item.id]: t }));
-                                          setValidationErrors(prev => prev.filter(id => id !== item.id));
-                                        }}
-                                      />
+                                      {isWeb ? (
+                                        <input
+                                          type="date"
+                                          style={{ flex: 1, fontSize: 14, color: '#0F172A', border: 'none', outline: 'none', backgroundColor: 'transparent', fontFamily: 'inherit' }}
+                                          value={formValues[item.id] || ''}
+                                          onChange={(e) => {
+                                            setFormValues(prev => ({ ...prev, [item.id]: e.target.value }));
+                                            setValidationErrors(prev => prev.filter(id => id !== item.id));
+                                          }}
+                                        />
+                                      ) : (
+                                        <>
+                                          <Feather name="calendar" size={16} color="#64748B" style={{ marginRight: 8 }} />
+                                          <TextInput
+                                            style={{ flex: 1, fontSize: 14, color: '#0F172A', outlineStyle: 'none' }}
+                                            placeholder={item.placeholder || 'YYYY-MM-DD'}
+                                            value={formValues[item.id] || ''}
+                                            onChangeText={(t) => {
+                                              setFormValues(prev => ({ ...prev, [item.id]: t }));
+                                              setValidationErrors(prev => prev.filter(id => id !== item.id));
+                                            }}
+                                          />
+                                        </>
+                                      )}
                                     </View>
                                   )}
 
@@ -4887,7 +5000,7 @@ const styles = StyleSheet.create({
   pageShadow: { elevation: 20, shadowColor: '#0F172A', shadowOpacity: 0.14, shadowRadius: 28, shadowOffset: { width: 0, height: 14 } },
   a4Page: { width: PAGE_WIDTH, minHeight: 750, backgroundColor: '#FFFFFF', padding: 50, borderRadius: 4 },
   floatingLogo: { position: 'absolute', zIndex: 99, borderStyle: 'dashed', borderWidth: 2, borderColor: '#3B82F6', padding: 4, borderRadius: 4 },
-  fullImg: { width: '100%', height: '100%', resizeMode: 'contain' },
+  fullImg: { width: '100%', height: '100%',  },
   dragHandle: { position: 'absolute', top: -10, left: -10, backgroundColor: '#3B82F6', borderRadius: 12, padding: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3 },
   letterInput: { width: '100%', paddingHorizontal: 4, paddingVertical: 2, marginBottom: 0, borderRadius: 6, backgroundColor: 'transparent', outlineStyle: 'none' },
   activeInput: { backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(59, 130, 246, 0.35)', borderRadius: 6 },
@@ -4928,7 +5041,7 @@ const styles = StyleSheet.create({
   watermarkImage: {
     width: 320,
     height: 320,
-    resizeMode: 'contain',
+    
   },
   formatGroup: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   mobileSectionBar: {
