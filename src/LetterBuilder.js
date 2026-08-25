@@ -5118,7 +5118,46 @@ export const generateWebPDFContent = (targetSections, targetLogo, targetLogoSize
       return tableHtml;
     }
 
-    if (key !== 'table' && key !== 'spacer' && (!s.content || !s.content.trim())) return "";
+    const isFormElement = key.startsWith('form');
+    if (isFormElement) {
+      const labelText = s.fieldLabel || key.replace('form', '');
+      const req = s.required ? `<span style="color:red;">*</span>` : "";
+      const fieldStyle = `width: 100%; border: 1px solid #CBD5E1; background-color: #F8FAFC; border-radius: 6px; padding: 10px; font-size: 14px; color: #94A3B8; box-sizing: border-box; font-family: sans-serif;`;
+      
+      let inputHtml = "";
+      if (key === 'formInput' || key === 'formDatePicker') {
+        inputHtml = `<div style="${fieldStyle} min-height: 40px; display: flex; align-items: center;">${s.placeholder || 'Enter value...'}</div>`;
+      } else if (key === 'formTextArea') {
+        inputHtml = `<div style="${fieldStyle} min-height: 80px;">${s.placeholder || 'Enter details...'}</div>`;
+      } else if (key === 'formDropdown') {
+        inputHtml = `<div style="${fieldStyle} min-height: 40px; display: flex; justify-content: space-between; align-items: center;">
+          <span>Select an option...</span>
+          <span>&#9660;</span>
+        </div>`;
+      } else if (key === 'formFileUpload') {
+        inputHtml = `<div style="${fieldStyle} min-height: 80px; border-style: dashed; border-width: 2px; text-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center;">
+          <span style="color: #3B82F6; font-weight: 600;">Click to upload a file</span>
+        </div>`;
+      } else if (key === 'formCheckbox' || key === 'formRadio') {
+        inputHtml = `<div style="display: flex; flex-direction: column; gap: 8px; margin-top: 4px;">
+          <div style="display: flex; align-items: center; gap: 8px;"><div style="width: 16px; height: 16px; border: 1px solid #CBD5E1; ${key === 'formRadio' ? 'border-radius: 50%;' : 'border-radius: 4px;'} background: #fff; display: inline-block;"></div> <span style="font-size: 13px;">Option 1</span></div>
+          <div style="display: flex; align-items: center; gap: 8px;"><div style="width: 16px; height: 16px; border: 1px solid #CBD5E1; ${key === 'formRadio' ? 'border-radius: 50%;' : 'border-radius: 4px;'} background: #fff; display: inline-block;"></div> <span style="font-size: 13px;">Option 2</span></div>
+        </div>`;
+      } else if (key === 'formSubmit') {
+        inputHtml = `<div style="background-color: #2563EB; color: white; padding: 10px 24px; border-radius: 6px; text-align: center; font-weight: 700; display: inline-block;">${s.content || 'Submit Form'}</div>`;
+      } else {
+         inputHtml = `<div style="${fieldStyle} min-height: 40px; display: flex; align-items: center;">${s.placeholder || 'Form Element'}</div>`;
+      }
+
+      return `
+        <div style="width: ${secWidth}; box-sizing: border-box; padding: ${secPadding}; margin: ${secMargin || '0 0 12px 0'};">
+          ${s.label !== false && key !== 'formSubmit' ? `<div style="font-size: 13px; font-weight: 600; color: #334155; margin-bottom: 6px; font-family: sans-serif;">${labelText} ${req}</div>` : ''}
+          ${inputHtml}
+        </div>
+      `;
+    }
+
+    if (key !== 'table' && key !== 'spacer' && (!s.content || !s.content.trim() || s.content === 'form_element')) return "";
 
     const isUnderlined = s.underline === true || (s.underlineStyle && s.underlineStyle !== "none" && s.underlineStyle !== "undefined");
 
